@@ -1,5 +1,7 @@
 # proc-snitch
 
+![logo](proc-snitch.png)
+
 **Windows per-process outbound firewall kill switch.**
 
 Pick a program from a live process list, then cut its internet access with a
@@ -21,8 +23,14 @@ pulling the plug on something chatty without hunting through `wf.msc`.
 
 ## Install
 
-```
-pip install psutil keyboard
+Pre-built `.exe` attached to every [release](https://github.com/Valli-2020/proc-snitch/releases).
+
+Or build locally:
+
+```powershell
+pip install psutil keyboard pyinstaller
+pyinstaller --onefile --console --icon proc-snitch.ico --name proc-snitch proc-snitch.py
+# .exe lands in dist/proc-snitch.exe
 ```
 
 ## Usage
