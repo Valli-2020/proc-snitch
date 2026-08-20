@@ -41,6 +41,13 @@ try:
 except ImportError:
     keyboard = None
 
+try:
+    import tkinter as tk
+    from tkinter import font as tkfont
+    HAS_TK = True
+except ImportError:
+    HAS_TK = False
+
 # ── paths / config ──────────────────────────────────────────────────
 HERE = os.path.dirname(os.path.abspath(__file__))
 CONFIG = os.path.join(HERE, "proc-snitch.json")
@@ -157,13 +164,13 @@ GLYPH = _init_stdout()
 
 
 # ── firewall ────────────────────────────────────────────────────────
-def _rule_name(exe_path):
+def _rule_name(exe_path, direction):
     """Unique, stable rule name. The hash is over the full path, so two
     different binaries with the same basename never collide."""
     h = hashlib.md5(exe_path.encode("utf-8", "replace")).hexdigest()[:12]
     base = exe_path.replace("/", "\\").rsplit("\\", 1)[-1] or "exe"
     base = "".join(c for c in base if c.isalnum() or c in "._-")[:48]
-    return f"{RULE_PREFIX}{base}_{h}"
+    return f"{RULE_PREFIX}{base}_{direction}_{h}"
 
 
 def _netsh(args):
@@ -209,16 +216,111 @@ def list_blocked():
 
 
 def set_block(exe_path, on):
-    """Add or remove the outbound block rule. Returns (ok, message)."""
-    rn = _rule_name(exe_path)
+    """Add or remove inbound AND outbound block rules. Returns (ok, message)."""
+    rn_out = _rule_name(exe_path, "out")
+    rn_in = _rule_name(exe_path, "in")
     if on:
-        ok, out = _netsh(["advfirewall", "firewall", "add", "rule",
-                          f"name={rn}", "dir=out", "action=block",
-                          f"program={exe_path}", "profile=any", "enable=yes"])
+        ok1, out1 = _netsh(["advfirewall", "firewall", "add", "rule",
+                            f"name={rn_out}", "dir=out", "action=block",
+                            f"program={exe_path}", "profile=any", "enable=yes"])
+        ok2, out2 = _netsh(["advfirewall", "firewall", "add", "rule",
+                            f"name={rn_in}", "dir=in", "action=block",
+                            f"program={exe_path}", "profile=any", "enable=yes"])
+        return ok1 and ok2, (out1 + "\n" + out2).strip()
     else:
-        ok, out = _netsh(["advfirewall", "firewall", "delete", "rule",
-                          f"name={rn}"])
-    return ok, out
+        ok1, out1 = _netsh(["advfirewall", "firewall", "delete", "rule",
+                            f"name={rn_out}"])
+        ok2, out2 = _netsh(["advfirewall", "firewall", "delete", "rule",
+                            f"name={rn_in}"])
+        return ok1 and ok2, (str(out1) + "\n" + str(out2)).strip()
+
+
+# ── overlay ─────────────────────────────────────────────────────────
+class Overlay:
+    """Persistent top-left status window (always-on-top).
+
+    Shows the currently guarded program and block state. Runs in a
+    background daemon thread so the console UI keeps working."""
+
+    BG = "#1a1b26"
+    FG = "#c0caf5"
+    ACCENT = "#7aa2f7"
+    RED = "#f7768e"
+    DIM = "#565f89"
+    GEOM = "+5+5"
+    REFRESH_MS = 250
+
+    def __init__(self, app):
+        self.app = app
+        self.root = None
+        self.thread = None
+
+    def start(self):
+        if not HAS_TK or not IS_WINDOWS:
+            return
+        self.thread = threading.Thread(target=self._run, daemon=True)
+        self.thread.start()
+
+    def stop(self):
+        if self.root is not None:
+            try:
+                self.root.quit()
+            except Exception:
+                pass
+            self.root = None
+
+    def _run(self):
+        self.root = tk.Tk()
+        self.root.overrideredirect(True)
+        self.root.attributes("-topmost", True)
+        self.root.attributes("-alpha", 0.92)
+        self.root.configure(bg=self.BG)
+        self.root.geometry(self.GEOM)
+
+        frame = tk.Frame(self.root, bg=self.BG, padx=8, pady=4)
+        frame.pack()
+
+        self.title_label = tk.Label(
+            frame, text="proc-snitch", bg=self.BG, fg=self.ACCENT,
+            font=("Consolas", 9, "bold"),
+        )
+        self.title_label.pack(anchor="w")
+
+        self.status_label = tk.Label(
+            frame, text="— no guard active —", bg=self.BG, fg=self.DIM,
+            font=("Consolas", 8),
+        )
+        self.status_label.pack(anchor="w")
+
+        self.detail_label = tk.Label(
+            frame, text="", bg=self.BG, fg=self.DIM,
+            font=("Consolas", 7),
+        )
+        self.detail_label.pack(anchor="w")
+
+        self._tick()
+        self.root.mainloop()
+
+    def _tick(self):
+        if self.root is None:
+            return
+        try:
+            app = self.app
+            if app.selected is None:
+                self.status_label.config(text="— no guard active —", fg=self.DIM)
+                self.detail_label.config(text="")
+            else:
+                exe, name = app.selected
+                blocked = app.is_blocked(exe)
+                state = "■ BLOCKED" if blocked else "□ ACTIVE"
+                color = self.RED if blocked else self.ACCENT
+                self.status_label.config(text=state, fg=color)
+                hotkey = app.hotkey.upper()
+                hint = f"{hotkey} toggles · {name}"
+                self.detail_label.config(text=hint[:50], fg=self.FG)
+        except Exception:
+            pass
+        self.root.after(self.REFRESH_MS, self._tick)
 
 
 # ── process scan ────────────────────────────────────────────────────
@@ -297,6 +399,7 @@ class App:
         self.flash_at = 0.0
         self.dirty = True
         self.running = True
+        self.overlay = Overlay(self)
 
     # ── state ────────────────────────────────────────────────────────
     def flash(self, msg):
@@ -456,7 +559,11 @@ class App:
                     removed += 1
             for exe in leftover:
                 if os.path.normcase(exe) not in [os.path.normcase(t) for t in targets]:
-                    rn = _rule_name(exe)
+                    rn = _rule_name(exe, "out")
+                    ok, _out = _netsh(["advfirewall", "firewall", "delete", "rule", f"name={rn}"])
+                    if ok:
+                        removed += 1
+                    rn = _rule_name(exe, "in")
                     ok, _out = _netsh(["advfirewall", "firewall", "delete", "rule", f"name={rn}"])
                     if ok:
                         removed += 1
@@ -540,6 +647,7 @@ class App:
             self.install_hotkey(self.hotkey)
         except Exception as e:
             self.flash(f"Could not bind hotkey [{self.hotkey}]: {e}")
+        self.overlay.start()
         self.rescan()
         try:
             while self.running:
@@ -556,6 +664,7 @@ class App:
         except KeyboardInterrupt:
             pass
         finally:
+            self.overlay.stop()
             self.remove_hotkey()
             try:
                 self.cleanup_prompt()

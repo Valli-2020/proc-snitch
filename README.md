@@ -33,6 +33,14 @@ pyinstaller --onefile --console --icon proc-snitch.ico --name proc-snitch proc-s
 # .exe lands in dist/proc-snitch.exe
 ```
 
+Or build on a remote Windows machine via SSH (useful from Linux/macOS):
+
+```bash
+# Set up once: add your Windows SSH private key as a repo secret named WINDOWS_SSH_KEY
+# Then trigger the workflow manually with your Windows SSH host:
+gh workflow run build.yml -f ssh_host=user@windows-pc
+```
+
 ## Usage
 
 ```
@@ -63,9 +71,7 @@ A `■` next to an entry means an outbound block rule is currently active for it
 
 ## Scope of the block
 
-proc-snitch blocks **all outbound traffic** for the executable — every port and
-protocol, on every firewall profile — not just web traffic. A blocked program
-also can't reach DNS, update servers, or LAN peers.
+proc-snitch blocks **all network traffic** for the executable — inbound and outbound, every port and protocol, on every firewall profile.
 
 To limit it to HTTP/HTTPS instead, add `protocol=tcp` and `remoteport=80,443`
 to the `add rule` call in `set_block()`:

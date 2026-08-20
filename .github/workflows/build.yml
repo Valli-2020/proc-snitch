@@ -4,9 +4,15 @@ on:
   push:
     tags: ["v*"]
   workflow_dispatch:
+    inputs:
+      ssh_host:
+        description: "Windows SSH host (user@host) for build"
+        required: false
+        default: ""
 
 jobs:
-  build:
+  build-local:
+    if: "${{ !github.event.inputs.ssh_host }}"
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -16,15 +22,59 @@ jobs:
           python-version: "3.12"
 
       - name: Install deps
-        run: |
-          pip install psutil keyboard pyinstaller
+        run: pip install psutil keyboard pyinstaller
 
       - name: Build .exe
         run: >
-          pyinstaller --onefile --windowed
+          pyinstaller --onefile --console
           --icon proc-snitch.ico
           --name proc-snitch
           proc-snitch.py
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: proc-snitch-exe
+          path: dist/proc-snitch.exe
+
+      - name: Attach to release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/proc-snitch.exe
+
+  build-ssh:
+    if: "${{ github.event.inputs.ssh_host }}"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build on Windows via SSH
+        env:
+          SSH_HOST: ${{ github.event.inputs.ssh_host }}
+          SSH_KEY: ${{ secrets.WINDOWS_SSH_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "$SSH_KEY" > ~/.ssh/windows_build_key
+          chmod 600 ~/.ssh/windows_build_key
+          ssh-keyscan -H "${SSH_HOST##*@}" >> ~/.ssh/known_hosts 2>/dev/null
+
+          # Sync source to Windows
+          rsync -az --exclude='.git' --exclude='__pycache__' --exclude='dist' \
+            -e "ssh -i ~/.ssh/windows_build_key" \
+            ./ "${SSH_HOST}:/temp/proc-snitch/"
+
+          # Build on Windows (PowerShell via SSH)
+          ssh -i ~/.ssh/windows_build_key "${SSH_HOST}" powershell -Command "
+            cd C:\temp\proc-snitch
+            pip install psutil keyboard pyinstaller
+            pyinstaller --onefile --console --icon proc-snitch.ico --name proc-snitch proc-snitch.py
+          "
+
+          # Fetch built .exe
+          mkdir -p dist
+          scp -i ~/.ssh/windows_build_key \
+            "${SSH_HOST}:/temp/proc-snitch/dist/proc-snitch.exe" dist/
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4

@@ -7,10 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- Blocks **all network traffic** (inbound + outbound), not just outbound. Two firewall rules per process.
+
 ### Added
 - `c` key clears ALL active ProcSnitch block rules at once (with confirmation).
+- Persistent top-left overlay status window (tkinter, always-on-top) showing guarded program + block state.
 - Logo (shield + cut bar) as `proc-snitch.ico` and `proc-snitch.png`.
-- GitHub Actions workflow to build `proc-snitch.exe` on Windows runners.
+- GitHub Actions workflow to build `proc-snitch.exe` on Windows runners (local or via SSH).
 - Pre-built `.exe` attached to every release.
 
 ## [1.0.0] - 2026-08-20
