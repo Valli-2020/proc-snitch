@@ -48,6 +48,7 @@ Your hotkey choice is saved to `proc-snitch.json` next to the script.
 | `b` / `Esc` | Back to the list |
 | `h` | Change the global hotkey |
 | `r` | Rescan running processes |
+| `c` | **Clear all** ProcSnitch block rules (with confirmation) |
 | `q` | Quit |
 
 A `■` next to an entry means an outbound block rule is currently active for it.

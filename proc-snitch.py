@@ -378,7 +378,7 @@ class App:
         rows = max(3, lines - 7)
         start, end = self._viewport(rows)
         buf = [f"  Proc-Snitch   hotkey: [{self.hotkey}]   "
-               f"[h]hotkey [r]rescan [q]quit", ""]
+               f"[h]hotkey [r]rescan [c]clear-all [q]quit", ""]
         for i in range(start, end):
             exe, name = self.items[i]
             cur = GLYPH["cur"] if (self.mode == "select" and i == self.sel) else " "
@@ -423,6 +423,46 @@ class App:
         self.dirty = True
 
     # ── input ────────────────────────────────────────────────────────
+    def clear_all_blocks(self):
+        """Remove every ProcSnitch block rule. Bound to 'c' in select mode."""
+        active_count = sum(1 for exe, _ in self.items if self.is_blocked(exe))
+        if active_count == 0:
+            self.flash("No active block rules to clear")
+            return
+        # confirmation
+        cls()
+        sys.stdout.flush()
+        try:
+            answer = input(f"  Remove ALL {active_count} ProcSnitch block rule(s)? [y/N]: ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            answer = ""
+        if answer != "y":
+            self.flash("Cancelled — rules kept")
+            self.dirty = True
+            return
+        with self.lock:
+            targets = [exe for exe, _ in self.items
+                       if os.path.normcase(exe) in self.blocked_set]
+            # Also catch rules for processes no longer running
+            leftover, _err = list_blocked()
+            if leftover is None:
+                self.flash("Could not read firewall rules")
+                return
+            removed = 0
+            for exe in targets:
+                ok, _out = set_block(exe, False)
+                if ok:
+                    self.blocked_set.discard(os.path.normcase(exe))
+                    removed += 1
+            for exe in leftover:
+                if os.path.normcase(exe) not in [os.path.normcase(t) for t in targets]:
+                    rn = _rule_name(exe)
+                    ok, _out = _netsh(["advfirewall", "firewall", "delete", "rule", f"name={rn}"])
+                    if ok:
+                        removed += 1
+            self.blocked_set = {e for e in self.blocked_set if os.path.normcase(e) not in [os.path.normcase(t) for t in targets]}
+            self.flash(f"Cleared {removed} block rule(s)")
+
     def handle(self, k):
         self.dirty = True
         if k == "q":
@@ -431,6 +471,8 @@ class App:
             self.rescan()
         elif k == "h":
             self.prompt_hotkey()
+        elif k == "c" and self.mode == "select":
+            self.clear_all_blocks()
         elif self.mode == "select":
             rows = max(3, shutil.get_terminal_size((80, 25)).lines - 7)
             last = len(self.items) - 1
